@@ -75,6 +75,9 @@ endif
 if CONFIG_MACH_NES
 emux_SOURCES += mach/nes.c
 endif
+if CONFIG_MACH_PSX
+emux_SOURCES += mach/psx.c
+endif
 if CONFIG_MACH_SMS
 emux_SOURCES += mach/sms.c
 endif

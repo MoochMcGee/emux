@@ -24,6 +24,8 @@ else ifeq ($(MACHINE), nes)
 	VALID_EXTS = nes|bin|rom
 else ifeq ($(MACHINE), sms)
 	VALID_EXTS = sms|bin|rom
+else ifeq ($(MACHINE), psx)
+	VALID_EXTS = iso
 endif
 
 all: $(TARGET)
