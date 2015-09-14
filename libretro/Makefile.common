@@ -57,5 +57,8 @@ sms_SOURCES = \
 
 # Sony PlayStation sources
 psx_SOURCES = \
+	$(CORE_DIR)/controllers/dma/psx_dma.c \
+	$(CORE_DIR)/controllers/video/gpu.c \
+	$(CORE_DIR)/cpu/r3051.c \
 	$(CORE_DIR)/mach/psx.c
 
