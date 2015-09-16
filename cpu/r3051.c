@@ -1,5 +1,6 @@
 #include <stdlib.h>
 #include <string.h>
+#include <bitops.h>
 #include <clock.h>
 #include <cpu.h>
 #include <log.h>
@@ -294,7 +295,70 @@ static void r3051_branch(struct r3051 *cpu, uint32_t PC);
 static void r3051_load(struct r3051 *cpu, uint8_t reg, uint32_t data);
 static void r3051_set(struct r3051 *cpu, uint8_t reg, uint32_t data);
 static void r3051_tick(struct r3051 *cpu);
+static void r3051_opcode_SPECIAL(struct r3051 *cpu);
+static void r3051_opcode_BCOND(struct r3051 *cpu);
+static void r3051_opcode_COPz(struct r3051 *cpu, int z);
 static void r3051_raise_exception(struct r3051 *cpu, enum exception e);
+static inline void LB(struct r3051 *cpu);
+static inline void LBU(struct r3051 *cpu);
+static inline void LH(struct r3051 *cpu);
+static inline void LHU(struct r3051 *cpu);
+static inline void LW(struct r3051 *cpu);
+static inline void LWL(struct r3051 *cpu);
+static inline void LWR(struct r3051 *cpu);
+static inline void SB(struct r3051 *cpu);
+static inline void SH(struct r3051 *cpu);
+static inline void SW(struct r3051 *cpu);
+static inline void SWL(struct r3051 *cpu);
+static inline void SWR(struct r3051 *cpu);
+static inline void ADDI(struct r3051 *cpu);
+static inline void ADDIU(struct r3051 *cpu);
+static inline void SLTI(struct r3051 *cpu);
+static inline void SLTIU(struct r3051 *cpu);
+static inline void ANDI(struct r3051 *cpu);
+static inline void ORI(struct r3051 *cpu);
+static inline void XORI(struct r3051 *cpu);
+static inline void LUI(struct r3051 *cpu);
+static inline void ADD(struct r3051 *cpu);
+static inline void ADDU(struct r3051 *cpu);
+static inline void SUB(struct r3051 *cpu);
+static inline void SUBU(struct r3051 *cpu);
+static inline void SLT(struct r3051 *cpu);
+static inline void SLTU(struct r3051 *cpu);
+static inline void AND(struct r3051 *cpu);
+static inline void OR(struct r3051 *cpu);
+static inline void XOR(struct r3051 *cpu);
+static inline void NOR(struct r3051 *cpu);
+static inline void SLL(struct r3051 *cpu);
+static inline void SRL(struct r3051 *cpu);
+static inline void SRA(struct r3051 *cpu);
+static inline void SLLV(struct r3051 *cpu);
+static inline void SRLV(struct r3051 *cpu);
+static inline void SRAV(struct r3051 *cpu);
+static inline void MULT(struct r3051 *cpu);
+static inline void MULTU(struct r3051 *cpu);
+static inline void DIV(struct r3051 *cpu);
+static inline void DIVU(struct r3051 *cpu);
+static inline void MFHI(struct r3051 *cpu);
+static inline void MFLO(struct r3051 *cpu);
+static inline void MTHI(struct r3051 *cpu);
+static inline void MTLO(struct r3051 *cpu);
+static inline void J(struct r3051 *cpu);
+static inline void JAL(struct r3051 *cpu);
+static inline void JR(struct r3051 *cpu);
+static inline void JALR(struct r3051 *cpu);
+static inline void BEQ(struct r3051 *cpu);
+static inline void BNE(struct r3051 *cpu);
+static inline void BLEZ(struct r3051 *cpu);
+static inline void BGTZ(struct r3051 *cpu);
+static inline void BLTZ(struct r3051 *cpu);
+static inline void BGEZ(struct r3051 *cpu);
+static inline void BLTZAL(struct r3051 *cpu);
+static inline void BGEZAL(struct r3051 *cpu);
+static inline void SYSCALL(struct r3051 *cpu);
+static inline void MTCz(struct r3051 *cpu, int z);
+static inline void MFCz(struct r3051 *cpu, int z);
+static inline void RFE(struct r3051 *cpu);
 
 static struct mops int_ctrl_mops = {
 	.readw = (readw_t)r3051_int_ctrl_readw,
@@ -422,6 +486,631 @@ DEFINE_MEM_READ(w, uint16_t)
 DEFINE_MEM_WRITE(w, uint16_t)
 DEFINE_MEM_READ(l, uint32_t)
 DEFINE_MEM_WRITE(l, uint32_t)
+
+void LB(struct r3051 *cpu)
+{
+	uint32_t a;
+	int8_t b;
+	a = cpu->R[cpu->instruction.i_type.rs];
+	a += (int16_t)cpu->instruction.i_type.immediate;
+	b = mem_readb(cpu, a);
+	r3051_load(cpu, cpu->instruction.i_type.rt, b);
+}
+
+void LBU(struct r3051 *cpu)
+{
+	uint32_t a;
+	uint8_t b;
+	a = cpu->R[cpu->instruction.i_type.rs];
+	a += (int16_t)cpu->instruction.i_type.immediate;
+	b = mem_readb(cpu, a);
+	r3051_load(cpu, cpu->instruction.i_type.rt, b);
+}
+
+void LH(struct r3051 *cpu)
+{
+	uint32_t a;
+	int16_t w;
+	a = cpu->R[cpu->instruction.i_type.rs];
+	a += (int16_t)cpu->instruction.i_type.immediate;
+	w = mem_readw(cpu, a);
+	r3051_load(cpu, cpu->instruction.i_type.rt, w);
+}
+
+void LHU(struct r3051 *cpu)
+{
+	uint32_t a;
+	uint16_t w;
+	a = cpu->R[cpu->instruction.i_type.rs];
+	a += (int16_t)cpu->instruction.i_type.immediate;
+	w = mem_readw(cpu, a);
+	r3051_load(cpu, cpu->instruction.i_type.rt, w);
+}
+
+void LW(struct r3051 *cpu)
+{
+	uint32_t a;
+	uint32_t l;
+	a = cpu->R[cpu->instruction.i_type.rs];
+	a += (int16_t)cpu->instruction.i_type.immediate;
+	l = mem_readl(cpu, a);
+	r3051_load(cpu, cpu->instruction.i_type.rt, l);
+}
+
+void LWL(struct r3051 *cpu)
+{
+	uint32_t a;
+	uint32_t aligned_a;
+	uint32_t l;
+	uint32_t v;
+	bool delay;
+	a = cpu->R[cpu->instruction.i_type.rs];
+	a += (int16_t)cpu->instruction.i_type.immediate;
+	aligned_a = a;
+	bitops_setl(&aligned_a, 0, 2, 0);
+	l = mem_readl(cpu, aligned_a);
+	delay = cpu->load_delay.delay;
+	delay &= (cpu->load_delay.reg == cpu->instruction.i_type.rt);
+	v = delay ? cpu->load_delay.data : cpu->R[cpu->instruction.i_type.rt];
+	switch (bitops_getl(&a, 0, 2)) {
+	case 0:
+		bitops_setl(&v, 24, 8, l);
+		break;
+	case 1:
+		bitops_setl(&l, 16, 16, l);
+		break;
+	case 2:
+		bitops_setl(&l, 8, 24, l);
+		break;
+	case 3:
+		v = l;
+		break;
+	}
+	r3051_load(cpu, cpu->instruction.i_type.rt, v);
+}
+
+void LWR(struct r3051 *cpu)
+{
+	uint32_t a;
+	uint32_t aligned_a;
+	uint32_t l;
+	uint32_t v;
+	bool delay;
+	a = cpu->R[cpu->instruction.i_type.rs];
+	a += (int16_t)cpu->instruction.i_type.immediate;
+	aligned_a = a;
+	bitops_setl(&aligned_a, 0, 2, 0);
+	l = mem_readl(cpu, aligned_a);
+	delay = cpu->load_delay.delay;
+	delay &= (cpu->load_delay.reg == cpu->instruction.i_type.rt);
+	v = delay ? cpu->load_delay.data : cpu->R[cpu->instruction.i_type.rt];
+	switch (bitops_getl(&a, 0, 2)) {
+	case 0:
+		v = l;
+		break;
+	case 1:
+		bitops_setl(&l, 0, 24, bitops_getl(&l, 8, 24));
+		break;
+	case 2:
+		bitops_setl(&l, 0, 16, bitops_getl(&l, 16, 16));
+		break;
+	case 3:
+		bitops_setl(&l, 0, 8, bitops_getl(&l, 24, 8));
+		break;
+	}
+	r3051_load(cpu, cpu->instruction.i_type.rt, v);
+}
+
+void SB(struct r3051 *cpu)
+{
+	uint32_t a;
+	a = cpu->R[cpu->instruction.i_type.rs];
+	a += (int16_t)cpu->instruction.i_type.immediate;
+	mem_writeb(cpu, cpu->R[cpu->instruction.i_type.rt], a);
+}
+
+void SH(struct r3051 *cpu)
+{
+	uint32_t a;
+	a = cpu->R[cpu->instruction.i_type.rs];
+	a += (int16_t)cpu->instruction.i_type.immediate;
+	mem_writew(cpu, cpu->R[cpu->instruction.i_type.rt], a);
+}
+
+void SW(struct r3051 *cpu)
+{
+	uint32_t a;
+	a = cpu->R[cpu->instruction.i_type.rs];
+	a += (int16_t)cpu->instruction.i_type.immediate;
+	mem_writel(cpu, cpu->R[cpu->instruction.i_type.rt], a);
+}
+
+void SWL(struct r3051 *cpu)
+{
+	uint32_t a;
+	uint32_t aligned_a;
+	uint32_t l;
+	uint32_t v;
+	a = cpu->R[cpu->instruction.i_type.rs];
+	a += (int16_t)cpu->instruction.i_type.immediate;
+	aligned_a = a;
+	bitops_setl(&aligned_a, 0, 2, 0);
+	l = mem_readl(cpu, aligned_a);
+	v = cpu->R[cpu->instruction.i_type.rt];
+	switch (bitops_getl(&a, 0, 2)) {
+	case 0:
+		bitops_setl(&l, 0, 8, bitops_getl(&v, 24, 8));
+		break;
+	case 1:
+		bitops_setl(&l, 0, 16, bitops_getl(&v, 16, 16));
+		break;
+	case 2:
+		bitops_setl(&l, 0, 24, bitops_getl(&v, 8, 24));
+		break;
+	case 3:
+		l = v;
+		break;
+	}
+	mem_writel(cpu, l, a);
+}
+
+void SWR(struct r3051 *cpu)
+{
+	uint32_t a;
+	uint32_t aligned_a;
+	uint32_t l;
+	uint32_t v;
+	a = cpu->R[cpu->instruction.i_type.rs];
+	a += (int16_t)cpu->instruction.i_type.immediate;
+	aligned_a = a;
+	bitops_setl(&aligned_a, 0, 2, 0);
+	l = mem_readl(cpu, aligned_a);
+	v = cpu->R[cpu->instruction.i_type.rt];
+	switch (bitops_getl(&a, 0, 2)) {
+	case 0:
+		l = v;
+		break;
+	case 1:
+		bitops_setl(&l, 8, 24, v);
+		break;
+	case 2:
+		bitops_setl(&l, 16, 16, v);
+		break;
+	case 3:
+		bitops_setl(&l, 24, 8, v);
+		break;
+	}
+	mem_writel(cpu, l, a);
+}
+
+void ADDI(struct r3051 *cpu)
+{
+	uint32_t l;
+	l = cpu->R[cpu->instruction.i_type.rs];
+	l += (int16_t)cpu->instruction.i_type.immediate;
+	r3051_set(cpu, cpu->instruction.i_type.rt, l);
+	/* Trap on two’s complement overflow. */
+}
+
+void ADDIU(struct r3051 *cpu)
+{
+	uint32_t l;
+	l = cpu->R[cpu->instruction.i_type.rs];
+	l += (int16_t)cpu->instruction.i_type.immediate;
+	r3051_set(cpu, cpu->instruction.i_type.rt, l);
+}
+
+void SLTI(struct r3051 *cpu)
+{
+	int32_t a = cpu->R[cpu->instruction.i_type.rs];
+	int32_t b = cpu->instruction.i_type.immediate;
+	r3051_set(cpu, cpu->instruction.i_type.rt, (a < b));
+}
+
+void SLTIU(struct r3051 *cpu)
+{
+	uint32_t a = cpu->R[cpu->instruction.i_type.rs];
+	uint32_t b = cpu->instruction.i_type.immediate;
+	r3051_set(cpu, cpu->instruction.i_type.rt, (a < b));
+}
+
+void ANDI(struct r3051 *cpu)
+{
+	uint32_t l;
+	l = cpu->R[cpu->instruction.i_type.rs];
+	l &= cpu->instruction.i_type.immediate;
+	r3051_set(cpu, cpu->instruction.i_type.rt, l);
+}
+
+void ORI(struct r3051 *cpu)
+{
+	uint32_t l;
+	l = cpu->R[cpu->instruction.i_type.rs];
+	l |= cpu->instruction.i_type.immediate;
+	r3051_set(cpu, cpu->instruction.i_type.rt, l);
+}
+
+void XORI(struct r3051 *cpu)
+{
+	uint32_t l;
+	l = cpu->R[cpu->instruction.i_type.rs];
+	l ^= cpu->instruction.i_type.immediate;
+	r3051_set(cpu, cpu->instruction.i_type.rt, l);
+}
+
+void LUI(struct r3051 *cpu)
+{
+	uint32_t l;
+	l = cpu->instruction.i_type.immediate << 16;
+	r3051_set(cpu, cpu->instruction.i_type.rt, l);
+}
+
+void ADD(struct r3051 *cpu)
+{
+	uint32_t l;
+	l = cpu->R[cpu->instruction.r_type.rs];
+	l += cpu->R[cpu->instruction.r_type.rt];
+	r3051_set(cpu, cpu->instruction.r_type.rd, l);
+	/* Trap on overflow */
+}
+
+void ADDU(struct r3051 *cpu)
+{
+	uint32_t l;
+	l = cpu->R[cpu->instruction.r_type.rs];
+	l += cpu->R[cpu->instruction.r_type.rt];
+	r3051_set(cpu, cpu->instruction.r_type.rd, l);
+}
+
+void SUB(struct r3051 *cpu)
+{
+	uint32_t l;
+	l = cpu->R[cpu->instruction.r_type.rs];
+	l -= cpu->R[cpu->instruction.r_type.rt];
+	r3051_set(cpu, cpu->instruction.r_type.rd, l);
+	/* Trap on overflow */
+}
+
+void SUBU(struct r3051 *cpu)
+{
+	uint32_t l;
+	l = cpu->R[cpu->instruction.r_type.rs];
+	l -= cpu->R[cpu->instruction.r_type.rt];
+	r3051_set(cpu, cpu->instruction.r_type.rd, l);
+}
+
+void SLT(struct r3051 *cpu)
+{
+	int32_t a = cpu->R[cpu->instruction.r_type.rs];
+	int32_t b = cpu->R[cpu->instruction.r_type.rt];
+	r3051_set(cpu, cpu->instruction.r_type.rd, (a < b));
+}
+
+void SLTU(struct r3051 *cpu)
+{
+	uint32_t a = cpu->R[cpu->instruction.r_type.rs];
+	uint32_t b = cpu->R[cpu->instruction.r_type.rt];
+	r3051_set(cpu, cpu->instruction.r_type.rd, (a < b));
+}
+
+void AND(struct r3051 *cpu)
+{
+	uint32_t l;
+	l = cpu->R[cpu->instruction.r_type.rs];
+	l &= cpu->R[cpu->instruction.r_type.rt];
+	r3051_set(cpu, cpu->instruction.r_type.rd, l);
+}
+
+void OR(struct r3051 *cpu)
+{
+	uint32_t l;
+	l = cpu->R[cpu->instruction.r_type.rs];
+	l |= cpu->R[cpu->instruction.r_type.rt];
+	r3051_set(cpu, cpu->instruction.r_type.rd, l);
+}
+
+void XOR(struct r3051 *cpu)
+{
+	uint32_t l;
+	l = cpu->R[cpu->instruction.r_type.rs];
+	l ^= cpu->R[cpu->instruction.r_type.rt];
+	r3051_set(cpu, cpu->instruction.r_type.rd, l);
+}
+
+void NOR(struct r3051 *cpu)
+{
+	uint32_t l;
+	l = cpu->R[cpu->instruction.r_type.rs];
+	l |= cpu->R[cpu->instruction.r_type.rt];
+	r3051_set(cpu, cpu->instruction.r_type.rd, ~l);
+}
+
+void SLL(struct r3051 *cpu)
+{
+	uint32_t v;
+	v = cpu->R[cpu->instruction.r_type.rt];
+	v <<= cpu->instruction.r_type.shamt;
+	r3051_set(cpu, cpu->instruction.r_type.rd, v);
+}
+
+void SRL(struct r3051 *cpu)
+{
+	uint32_t v;
+	v = cpu->R[cpu->instruction.r_type.rt];
+	v >>= cpu->instruction.r_type.shamt;
+	r3051_set(cpu, cpu->instruction.r_type.rd, v);
+}
+
+void SRA(struct r3051 *cpu)
+{
+	int32_t v;
+	v = cpu->R[cpu->instruction.r_type.rt];
+	v >>= cpu->instruction.r_type.shamt;
+	r3051_set(cpu, cpu->instruction.r_type.rd, v);
+}
+
+void SLLV(struct r3051 *cpu)
+{
+	uint32_t v;
+	uint32_t shift;
+	v = cpu->R[cpu->instruction.r_type.rt];
+	shift = bitops_getl(&cpu->R[cpu->instruction.r_type.rs], 0, 5);
+	v <<= shift;
+	r3051_set(cpu, cpu->instruction.r_type.rd, v);
+}
+
+void SRLV(struct r3051 *cpu)
+{
+	uint32_t v;
+	uint32_t shift;
+	v = cpu->R[cpu->instruction.r_type.rt];
+	shift = bitops_getl(&cpu->R[cpu->instruction.r_type.rs], 0, 5);
+	v >>= shift;
+	r3051_set(cpu, cpu->instruction.r_type.rd, v);
+}
+
+void SRAV(struct r3051 *cpu)
+{
+	int32_t v;
+	uint32_t shift;
+	v = cpu->R[cpu->instruction.r_type.rt];
+	shift = bitops_getl(&cpu->R[cpu->instruction.r_type.rs], 0, 5);
+	v >>= shift;
+	r3051_set(cpu, cpu->instruction.r_type.rd, v);
+}
+
+void MULT(struct r3051 *cpu)
+{
+	int64_t result;
+	result = (int64_t)cpu->R[cpu->instruction.r_type.rs];
+	result *= (int64_t)cpu->R[cpu->instruction.r_type.rt];
+	cpu->HI = result >> 32;
+	cpu->LO = result;
+}
+
+void MULTU(struct r3051 *cpu)
+{
+	uint64_t result;
+	result = (uint64_t)cpu->R[cpu->instruction.r_type.rs];
+	result *= (uint64_t)cpu->R[cpu->instruction.r_type.rt];
+	cpu->HI = result >> 32;
+	cpu->LO = result;
+}
+
+void DIV(struct r3051 *cpu)
+{
+	int32_t n;
+	int32_t d;
+	n = cpu->R[cpu->instruction.r_type.rs];
+	d = cpu->R[cpu->instruction.r_type.rt];
+	if (d == 0) {
+		cpu->HI = n;
+		cpu->LO = (n >= 0) ? -1 : 1;
+	} else if (((uint32_t)n == 0x80000000) && (d == -1)) {
+		cpu->HI = 0;
+		cpu->LO = n;
+	} else {
+		cpu->HI = n % d;
+		cpu->LO = n / d;
+	}
+}
+
+void DIVU(struct r3051 *cpu)
+{
+	uint32_t l;
+	l = cpu->R[cpu->instruction.r_type.rt];
+	cpu->HI = cpu->R[cpu->instruction.r_type.rs] % l;
+	cpu->LO = cpu->R[cpu->instruction.r_type.rs] / l;
+}
+
+void MFHI(struct r3051 *cpu)
+{
+	r3051_set(cpu, cpu->instruction.r_type.rd, cpu->HI);
+}
+
+void MFLO(struct r3051 *cpu)
+{
+	r3051_set(cpu, cpu->instruction.r_type.rd, cpu->LO);
+}
+
+void MTHI(struct r3051 *cpu)
+{
+	cpu->HI = cpu->R[cpu->instruction.r_type.rs];
+}
+
+void MTLO(struct r3051 *cpu)
+{
+	cpu->LO = cpu->R[cpu->instruction.r_type.rs];
+}
+
+void J(struct r3051 *cpu)
+{
+	uint32_t PC;
+	uint32_t a;
+	PC = cpu->PC;
+	a = cpu->instruction.j_type.target << 2;
+	bitops_setl(&PC, 0, 28, a);
+	r3051_branch(cpu, PC);
+}
+
+void JAL(struct r3051 *cpu)
+{
+	uint32_t PC;
+	uint32_t a;
+	r3051_set(cpu, 31, cpu->PC + 4);
+	PC = cpu->PC;
+	a = cpu->instruction.j_type.target << 2;
+	bitops_setl(&PC, 0, 28, a);
+	r3051_branch(cpu, PC);
+}
+
+void JR(struct r3051 *cpu)
+{
+	r3051_branch(cpu, cpu->R[cpu->instruction.r_type.rs]);
+}
+
+void JALR(struct r3051 *cpu)
+{
+	r3051_set(cpu, 31, cpu->PC + 4);
+	r3051_branch(cpu, cpu->R[cpu->instruction.r_type.rs]);
+}
+
+void BEQ(struct r3051 *cpu)
+{
+	uint32_t s;
+	uint32_t t;
+	uint32_t a;
+	s = cpu->R[cpu->instruction.i_type.rs];
+	t = cpu->R[cpu->instruction.i_type.rt];
+	if (s == t) {
+		a = cpu->PC + (int16_t)(cpu->instruction.i_type.immediate << 2);
+		r3051_branch(cpu, a);
+	}
+}
+
+void BNE(struct r3051 *cpu)
+{
+	uint32_t s;
+	uint32_t t;
+	uint32_t a;
+	s = cpu->R[cpu->instruction.i_type.rs];
+	t = cpu->R[cpu->instruction.i_type.rt];
+	if (s != t) {
+		a = cpu->PC + (int16_t)(cpu->instruction.i_type.immediate << 2);
+		r3051_branch(cpu, a);
+	}
+}
+
+void BLEZ(struct r3051 *cpu)
+{
+	int32_t s;
+	uint32_t a;
+	s = cpu->R[cpu->instruction.i_type.rs];
+	if (s <= 0) {
+		a = cpu->PC + (int16_t)(cpu->instruction.i_type.immediate << 2);
+		r3051_branch(cpu, a);
+	}
+}
+
+void BGTZ(struct r3051 *cpu)
+{
+	int32_t s;
+	uint32_t a;
+	s = cpu->R[cpu->instruction.i_type.rs];
+	if (s > 0) {
+		a = cpu->PC + (int16_t)(cpu->instruction.i_type.immediate << 2);
+		r3051_branch(cpu, a);
+	}
+}
+
+void BLTZ(struct r3051 *cpu)
+{
+	int32_t s;
+	uint32_t a;
+	s = cpu->R[cpu->instruction.i_type.rs];
+	if (s < 0) {
+		a = cpu->PC + (int16_t)(cpu->instruction.i_type.immediate << 2);
+		r3051_branch(cpu, a);
+	}
+}
+
+void BGEZ(struct r3051 *cpu)
+{
+	int32_t s;
+	uint32_t a;
+	s = cpu->R[cpu->instruction.i_type.rs];
+	if (s >= 0) {
+		a = cpu->PC + (int16_t)(cpu->instruction.i_type.immediate << 2);
+		r3051_branch(cpu, a);
+	}
+}
+
+void BLTZAL(struct r3051 *cpu)
+{
+	int32_t s;
+	uint32_t a;
+	s = cpu->R[cpu->instruction.i_type.rs];
+	if (s < 0) {
+		cpu->ra = cpu->PC + 4;
+		a = cpu->PC + (int16_t)(cpu->instruction.i_type.immediate << 2);
+		r3051_branch(cpu, a);
+	}
+}
+
+void BGEZAL(struct r3051 *cpu)
+{
+	int32_t s;
+	uint32_t a;
+	s = cpu->R[cpu->instruction.i_type.rs];
+	if (s >= 0) {
+		cpu->ra = cpu->PC + 4;
+		a = cpu->PC + (int16_t)(cpu->instruction.i_type.immediate << 2);
+		r3051_branch(cpu, a);
+	}
+}
+
+void SYSCALL(struct r3051 *cpu)
+{
+	r3051_raise_exception(cpu, EXCEPTION_Sys);
+}
+
+void MTCz(struct r3051 *cpu, int z)
+{
+	uint32_t l;
+	l = cpu->R[cpu->instruction.r_type.rt];
+	switch (z) {
+	case 0:
+		cpu->cop0.R[cpu->instruction.r_type.rd] = l;
+		break;
+	default:
+		LOG_W("MTC: unhandled coprocessor (%u)!\n", z);
+		break;
+	}
+}
+
+void MFCz(struct r3051 *cpu, int z)
+{
+	uint32_t l;
+	switch (z) {
+	case 0:
+		l = cpu->cop0.R[cpu->instruction.r_type.rd];
+		break;
+	default:
+		l = 0;
+		LOG_W("MTC: unhandled coprocessor (%u)!\n", z);
+		break;
+	}
+	r3051_load(cpu, cpu->instruction.r_type.rt, l);
+}
+
+void RFE(struct r3051 *cpu)
+{
+	/* Shift interrupt enable/kernel-user mode bits back */
+	cpu->cop0.stat.IEc = cpu->cop0.stat.IEp;
+	cpu->cop0.stat.KUc = cpu->cop0.stat.KUp;
+	cpu->cop0.stat.IEp = cpu->cop0.stat.IEo;
+	cpu->cop0.stat.KUp = cpu->cop0.stat.KUo;
+}
 
 void r3051_fetch(struct r3051 *cpu)
 {
@@ -557,8 +1246,104 @@ void r3051_tick(struct r3051 *cpu)
 
 	/* Execute instruction */
 	switch (cpu->instruction.opcode) {
+	case 0x00:
+		r3051_opcode_SPECIAL(cpu);
+		break;
+	case 0x01:
+		r3051_opcode_BCOND(cpu);
+		break;
+	case 0x02:
+		J(cpu);
+		break;
+	case 0x03:
+		JAL(cpu);
+		break;
+	case 0x04:
+		BEQ(cpu);
+		break;
+	case 0x05:
+		BNE(cpu);
+		break;
+	case 0x06:
+		BLEZ(cpu);
+		break;
+	case 0x07:
+		BGTZ(cpu);
+		break;
+	case 0x08:
+		ADDI(cpu);
+		break;
+	case 0x09:
+		ADDIU(cpu);
+		break;
+	case 0x0A:
+		SLTI(cpu);
+		break;
+	case 0x0B:
+		SLTIU(cpu);
+		break;
+	case 0x0C:
+		ANDI(cpu);
+		break;
+	case 0x0D:
+		ORI(cpu);
+		break;
+	case 0x0E:
+		XORI(cpu);
+		break;
+	case 0x0F:
+		LUI(cpu);
+		break;
+	case 0x10:
+		r3051_opcode_COPz(cpu, 0);
+		break;
+	case 0x11:
+		r3051_opcode_COPz(cpu, 1);
+		break;
+	case 0x12:
+		r3051_opcode_COPz(cpu, 2);
+		break;
+	case 0x13:
+		r3051_opcode_COPz(cpu, 3);
+		break;
+	case 0x20:
+		LB(cpu);
+		break;
+	case 0x21:
+		LH(cpu);
+		break;
+	case 0x22:
+		LWL(cpu);
+		break;
+	case 0x23:
+		LW(cpu);
+		break;
+	case 0x24:
+		LBU(cpu);
+		break;
+	case 0x25:
+		LHU(cpu);
+		break;
+	case 0x26:
+		LWR(cpu);
+		break;
+	case 0x28:
+		SB(cpu);
+		break;
+	case 0x29:
+		SH(cpu);
+		break;
+	case 0x2A:
+		SWL(cpu);
+		break;
+	case 0x2B:
+		SW(cpu);
+		break;
+	case 0x2E:
+		SWR(cpu);
+		break;
 	default:
-		LOG_W("Unknown instruction (%08x)!\n", cpu->instruction.raw);
+		LOG_W("Unknown opcode (%02x)!\n", cpu->instruction.opcode);
 		break;
 	}
 
@@ -576,6 +1361,142 @@ void r3051_tick(struct r3051 *cpu)
 
 	/* Always consume one cycle */
 	clock_consume(1);
+}
+
+void r3051_opcode_SPECIAL(struct r3051 *cpu)
+{
+	/* Execute SPECIAL instruction */
+	switch (cpu->instruction.special.opcode) {
+	case 0x00:
+		SLL(cpu);
+		break;
+	case 0x02:
+		SRL(cpu);
+		break;
+	case 0x03:
+		SRA(cpu);
+		break;
+	case 0x04:
+		SLLV(cpu);
+		break;
+	case 0x06:
+		SRLV(cpu);
+		break;
+	case 0x07:
+		SRAV(cpu);
+		break;
+	case 0x08:
+		JR(cpu);
+		break;
+	case 0x09:
+		JALR(cpu);
+		break;
+	case 0x0C:
+		SYSCALL(cpu);
+		break;
+	case 0x10:
+		MFHI(cpu);
+		break;
+	case 0x11:
+		MTHI(cpu);
+		break;
+	case 0x12:
+		MFLO(cpu);
+		break;
+	case 0x13:
+		MTLO(cpu);
+		break;
+	case 0x18:
+		MULT(cpu);
+		break;
+	case 0x19:
+		MULTU(cpu);
+		break;
+	case 0x1A:
+		DIV(cpu);
+		break;
+	case 0x1B:
+		DIVU(cpu);
+		break;
+	case 0x20:
+		ADD(cpu);
+		break;
+	case 0x21:
+		ADDU(cpu);
+		break;
+	case 0x22:
+		SUB(cpu);
+		break;
+	case 0x23:
+		SUBU(cpu);
+		break;
+	case 0x24:
+		AND(cpu);
+		break;
+	case 0x25:
+		OR(cpu);
+		break;
+	case 0x26:
+		XOR(cpu);
+		break;
+	case 0x27:
+		NOR(cpu);
+		break;
+	case 0x2A:
+		SLT(cpu);
+		break;
+	case 0x2B:
+		SLTU(cpu);
+		break;
+	default:
+		LOG_W("Unknown SPECIAL opcode (%02x)!\n",
+			cpu->instruction.special.opcode);
+		break;
+	}
+}
+
+void r3051_opcode_BCOND(struct r3051 *cpu)
+{
+	/* Execute BCOND instruction */
+	switch (cpu->instruction.bcond.opcode) {
+	case 0x00:
+		BLTZ(cpu);
+		break;
+	case 0x01:
+		BGEZ(cpu);
+		break;
+	case 0x10:
+		BLTZAL(cpu);
+		break;
+	case 0x11:
+		BGEZAL(cpu);
+		break;
+	default:
+		LOG_W("Unknown SPECIAL opcode (%02x)!\n",
+			cpu->instruction.special.opcode);
+		break;
+	}
+}
+
+void r3051_opcode_COPz(struct r3051 *cpu, int z)
+{
+	/* Execute COP instruction */
+	switch (cpu->instruction.cop.opcode) {
+	case 0x00:
+		MFCz(cpu, z);
+		break;
+	case 0x04:
+		MTCz(cpu, z);
+		break;
+	case 0x10:
+		RFE(cpu);
+		break;
+	default:
+		LOG_W("unknown COP%u opcode (%02x)!\n",
+			z,
+			cpu->instruction.cop.opcode);
+		break;
+	}
 }
 
 void r3051_raise_exception(struct r3051 *cpu, enum exception e)
