@@ -187,6 +187,12 @@ union cop0 {
 	};
 };
 
+struct branch_delay {
+	uint32_t PC;
+	bool delay;
+	bool pending;
+};
+
 struct r3051 {
 	union {
 		uint32_t R[NUM_REGISTERS];
@@ -228,6 +234,7 @@ struct r3051 {
 	uint32_t HI;
 	uint32_t LO;
 	uint32_t PC;
+	struct branch_delay branch_delay;
 	union instruction instruction;
 	union cop0 cop0;
 	union cache_control cache_ctrl;
@@ -241,6 +248,7 @@ static bool r3051_init(struct cpu_instance *instance);
 static void r3051_reset(struct cpu_instance *instance);
 static void r3051_deinit(struct cpu_instance *instance);
 static void r3051_fetch(struct r3051 *cpu);
+static void r3051_branch(struct r3051 *cpu, uint32_t PC);
 static void r3051_tick(struct r3051 *cpu);
 
 #define DEFINE_MEM_READ(ext, type) \
@@ -353,16 +361,35 @@ void r3051_fetch(struct r3051 *cpu)
 	clock_consume(3);
 }
 
+void r3051_branch(struct r3051 *cpu, uint32_t PC)
+{
+	/* Set branch delay PC and pending flag */
+	cpu->branch_delay.PC = PC;
+	cpu->branch_delay.pending = true;
+}
+
 void r3051_tick(struct r3051 *cpu)
 {
 	/* Fetch instruction */
 	r3051_fetch(cpu);
+
+	/* Handle pending branch delay (branch was taken in previous cycle) */
+	if (cpu->branch_delay.pending) {
+		cpu->branch_delay.delay = true;
+		cpu->branch_delay.pending = false;
+	}
 
 	/* Execute instruction */
 	switch (cpu->instruction.opcode) {
 	default:
 		LOG_W("Unknown instruction (%08x)!\n", cpu->instruction.raw);
 		break;
+	}
+
+	/* Handle branch delay (PC now needs to be updated) */
+	if (cpu->branch_delay.delay) {
+		cpu->PC = cpu->branch_delay.PC;
+		cpu->branch_delay.delay = false;
 	}
 
 	/* Always consume one cycle */
@@ -412,6 +439,8 @@ void r3051_reset(struct cpu_instance *instance)
 	cpu->PC = INITIAL_PC;
 	memset(cpu->R, 0, NUM_REGISTERS * sizeof(uint32_t));
 	memset(cpu->cop0.R, 0, NUM_COP0_REGISTERS * sizeof(uint32_t));
+	cpu->branch_delay.delay = false;
+	cpu->branch_delay.pending = false;
 
 	/* Enable clock */
 	cpu->clock.enabled = true;
