@@ -8,3 +8,11 @@ config CONTROLLER_DMA_NES
 
 endmenu
 
+config CONTROLLER_DMA_PSX
+	bool "PSX DMA controller"
+	default y
+	help
+		Enable PSX DMA controller
+
+endmenu
+
