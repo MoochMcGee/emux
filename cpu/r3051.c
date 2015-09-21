@@ -444,6 +444,9 @@ void r3051_int_ctrl_writel(struct r3051 *cpu, uint32_t l, uint32_t a)
 		if (!WITHIN_REGION(a, KSEG2)) \
 			a = PHYSICAL_ADDRESS(a); \
 	\
+		/* Handle DRAM access timing */ \
+		clock_consume(6); \
+	\
 		/* Call regular memory operation */ \
 		return memory_read##ext(cpu->bus_id, a); \
 	}
@@ -459,8 +462,12 @@ void r3051_int_ctrl_writel(struct r3051 *cpu, uint32_t l, uint32_t a)
 		if (!WITHIN_REGION(a, KSEG2)) \
 			a = PHYSICAL_ADDRESS(a); \
 	\
-		/* Call regular memory operation if cache is not isolated */ \
+		/* Handle scenario where cache is not isolated */ \
 		if (!cpu->cop0.stat.IsC) { \
+			/* Handle DRAM access timing */ \
+			clock_consume(6); \
+	\
+			/* Call memory operation */ \
 			memory_write##ext(cpu->bus_id, data, a); \
 			return; \
 		} \
