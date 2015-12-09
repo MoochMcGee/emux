@@ -6,6 +6,11 @@
 #include <controller.h>
 #include <memory.h>
 #include <util.h>
+#include <video.h>
+
+#define SCREEN_WIDTH	1024
+#define SCREEN_HEIGHT	512
+#define FPS		60.0f
 
 #define GP0		0x00
 #define GP1		0x04
@@ -358,6 +363,7 @@ struct gpu {
 	struct fifo fifo;
 	struct region region;
 	struct dma_channel dma_channel;
+	struct clock clock;
 };
 
 static bool gpu_init(struct controller_instance *instance);
@@ -370,6 +376,7 @@ static void gpu_dma_writel(struct gpu *gpu, uint32_t l);
 static void gpu_process_fifo(struct gpu *gpu);
 static void gpu_gp0_cmd(struct gpu *gpu, union cmd cmd);
 static void gpu_gp1_cmd(struct gpu *gpu, union cmd cmd);
+static void gpu_tick(struct gpu *gpu);
 
 static void draw_pixel(struct gpu *gpu, struct pixel *pixel);
 static void draw_line(struct gpu *gpu, struct line *line);
@@ -1770,14 +1777,92 @@ void gpu_gp1_cmd(struct gpu *gpu, union cmd cmd)
 	}
 }
 
+void gpu_tick(struct gpu *gpu)
+{
+	uint16_t start_x;
+	uint16_t start_y;
+	uint16_t size_x;
+	uint16_t size_y;
+	uint16_t x;
+	uint16_t y;
+	uint16_t data;
+	uint32_t offset;
+	int cycles_per_pixel;
+	struct color c;
+
+	/* Check if display is enabled */
+	if (!gpu->stat.display_disable) {
+		/* Calculate final display area */
+		start_x = gpu->display_area_src_x;
+		start_y = gpu->display_area_src_y;
+		size_x = gpu->display_area_dest_x2 - gpu->display_area_dest_x1;
+		size_y = gpu->display_area_dest_y2 - gpu->display_area_dest_y1;
+		start_x = 0;
+		start_y = 0;
+		size_x = FB_W * 4;
+		size_y = FB_H / 2;
+
+		/* Adapt horizontal size as it is given in cycles */
+		cycles_per_pixel = 4;
+		size_x /= cycles_per_pixel;
+
+		/* Handle interlacing */
+		if (gpu->stat.vertical_interlace) {
+			/* Adapt vertical size */
+			size_y *= 2;
+
+			/* Update odd/even state */
+			gpu->stat.odd_even = ~gpu->stat.odd_even;
+		}
+
+		/* Draw screen */
+		for (y = 0; y < size_y; y++)
+			for (x = 0; x < size_x; x++) {
+				/* Get pixel offset within frame buffer */
+				offset = start_x + x;
+				offset += (start_y + y) * FB_W;
+				offset *= sizeof(uint16_t);
+
+				/* Get frame buffer data */
+				data = gpu->vram[offset] << 8;
+				data |= gpu->vram[offset + 1];
+
+				/* Extract color components */
+				c.r = bitops_getw(&data, 0, 5) << 3;
+				c.g = bitops_getw(&data, 5, 5) << 3;
+				c.b = bitops_getw(&data, 10, 5) << 3;
+
+				/* Draw pixel on screen */
+				video_set_pixel(x, y, c);
+			}
+	}
+
+	clock_consume(SCREEN_WIDTH * SCREEN_HEIGHT);
+
+	/* Update screen contents */
+	video_unlock();
+	video_update();
+	video_lock();
+}
+
 bool gpu_init(struct controller_instance *instance)
 {
 	struct gpu *gpu;
 	struct resource *res;
+	struct video_specs video_specs;
 
 	/* Allocate GPU structure */
 	instance->priv_data = calloc(1, sizeof(struct gpu));
 	gpu = instance->priv_data;
+
+	/* Initialize video frontend */
+	video_specs.width = SCREEN_WIDTH;
+	video_specs.height = SCREEN_HEIGHT;
+	video_specs.fps = FPS;
+	if (!video_init(&video_specs)) {
+		free(gpu);
+		return false;
+	}
 
 	/* Add GPU memory region */
 	res = resource_get("mem",
@@ -1798,6 +1883,16 @@ bool gpu_init(struct controller_instance *instance)
 	gpu->dma_channel.ops = &gpu_dma_ops;
 	gpu->dma_channel.data = gpu;
 	dma_channel_add(&gpu->dma_channel);
+
+	/* Add GPU clock */
+	res = resource_get("clk",
+		RESOURCE_CLK,
+		instance->resources,
+		instance->num_resources);
+	gpu->clock.rate = res->data.clk;
+	gpu->clock.data = gpu;
+	gpu->clock.tick = (clock_tick_t)gpu_tick;
+	clock_add(&gpu->clock);
 
 	return true;
 }
