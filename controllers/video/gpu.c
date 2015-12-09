@@ -228,6 +228,44 @@ struct cmd_mask_bit_setting {
 	uint32_t opcode:8;
 };
 
+struct cmd_dma_dir {
+	uint32_t dir:2;
+	uint32_t unused:22;
+	uint32_t opcode:8;
+};
+
+struct cmd_start_of_display_area {
+	uint32_t x:10;
+	uint32_t y:9;
+	uint32_t unused:5;
+	uint32_t opcode:8;
+};
+
+struct cmd_horizontal_display_range {
+	uint32_t x1:12;
+	uint32_t x2:12;
+	uint32_t opcode:8;
+};
+
+struct cmd_vertical_display_range {
+	uint32_t y1:10;
+	uint32_t y2:10;
+	uint32_t unused:4;
+	uint32_t opcode:8;
+};
+
+struct cmd_display_mode {
+	uint32_t horizontal_res_1:2;
+	uint32_t vertical_res:1;
+	uint32_t video_mode:1;
+	uint32_t color_depth:1;
+	uint32_t vertical_interlace:1;
+	uint32_t horizontal_res_2:1;
+	uint32_t reverse:1;
+	uint32_t unused:16;
+	uint32_t opcode:8;
+};
+
 union cmd {
 	uint32_t raw;
 	struct {
@@ -239,6 +277,11 @@ union cmd {
 	struct cmd_set_drawing_area set_drawing_area;
 	struct cmd_set_drawing_offset set_drawing_offset;
 	struct cmd_mask_bit_setting mask_bit_setting;
+	struct cmd_dma_dir dma_dir;
+	struct cmd_start_of_display_area start_of_display_area;
+	struct cmd_horizontal_display_range horizontal_display_range;
+	struct cmd_vertical_display_range vertical_display_range;
+	struct cmd_display_mode display_mode;
 };
 
 struct copy_data {
@@ -355,6 +398,10 @@ static inline void cmd_set_drawing_area_tl(struct gpu *gpu, union cmd cmd);
 static inline void cmd_set_drawing_area_br(struct gpu *gpu, union cmd cmd);
 static inline void cmd_set_drawing_offset(struct gpu *gpu, union cmd cmd);
 static inline void cmd_mask_bit_setting(struct gpu *gpu);
+
+static inline void cmd_reset_gpu(struct gpu *gpu);
+static inline void cmd_dma_dir(struct gpu *gpu, union cmd cmd);
+static inline void cmd_display_mode(struct gpu *gpu, union cmd cmd);
 
 static struct mops gpu_mops = {
 	.readl = (readl_t)gpu_readl,
@@ -1358,11 +1405,72 @@ void cmd_mask_bit_setting(struct gpu *gpu)
 	fifo_dequeue(&gpu->fifo, &cmd.raw, 1);
 
 	/* Save mask bit parameters */
-	gpu->set_mask_while_drawing = cmd.mask_bit_setting.set_while_drawing;
-	gpu->check_mask_before_draw = cmd.mask_bit_setting.check_before_draw;
+	gpu->stat.set_mask_bit = cmd.mask_bit_setting.set_while_drawing;
+	gpu->stat.draw_pixels = cmd.mask_bit_setting.check_before_draw;
 
 	/* Flag command as complete */
 	gpu->fifo.cmd_in_progress = false;
+}
+
+/* GP1(00h) - Reset GPU */
+void cmd_reset_gpu(struct gpu *gpu)
+{
+	/* Reset status register */
+	gpu->stat.raw = 0;
+	gpu->stat.reserved = 1;
+	gpu->stat.display_disable = 0;
+
+	/* Reset command buffer */
+	memset(&gpu->fifo, 0, sizeof(struct fifo));
+
+	/* GPU is always ready to send/receive commands */
+	gpu->stat.ready_recv_cmd = 1;
+	gpu->stat.ready_send_vram = 1;
+	gpu->stat.ready_recv_dma = 1;
+}
+
+/* GP1(04h) - DMA Direction / Data Request */
+void cmd_dma_dir(struct gpu *gpu, union cmd cmd)
+{
+	/* Save DMA direction */
+	gpu->stat.dma_dir = cmd.dma_dir.dir;
+}
+
+/* GP1(05h) - Start of Display area (in VRAM) */
+void cmd_start_of_display_area(struct gpu *gpu, union cmd cmd)
+{
+	/* Save display area origin */
+	gpu->display_area_src_x = cmd.start_of_display_area.x;
+	gpu->display_area_src_y = cmd.start_of_display_area.y;
+}
+
+/* GP1(06h) - Horizontal Display range (on Screen) */
+void cmd_horizontal_display_range(struct gpu *gpu, union cmd cmd)
+{
+	/* Save horizontal display range */
+	gpu->display_area_dest_x1 = cmd.horizontal_display_range.x1;
+	gpu->display_area_dest_x2 = cmd.horizontal_display_range.x2;
+}
+
+/* GP1(07h) - Vertical Display range (on Screen) */
+void cmd_vertical_display_range(struct gpu *gpu, union cmd cmd)
+{
+	/* Save horizontal display range */
+	gpu->display_area_dest_y1 = cmd.vertical_display_range.y1;
+	gpu->display_area_dest_y2 = cmd.vertical_display_range.y2;
+}
+
+/* GP1(08h) - Display mode */
+void cmd_display_mode(struct gpu *gpu, union cmd cmd)
+{
+	/* Save parameters */
+	gpu->stat.horizontal_res_1 = cmd.display_mode.horizontal_res_1;
+	gpu->stat.vertical_res = cmd.display_mode.vertical_res;
+	gpu->stat.video_mode = cmd.display_mode.video_mode;
+	gpu->stat.color_depth = cmd.display_mode.color_depth;
+	gpu->stat.vertical_interlace = cmd.display_mode.vertical_interlace;
+	gpu->stat.horizontal_res_2 = cmd.display_mode.horizontal_res_2;
+	gpu->stat.reverse = cmd.display_mode.reverse;
 }
 
 bool fifo_empty(struct fifo *fifo)
@@ -1634,10 +1742,28 @@ void gpu_gp0_cmd(struct gpu *gpu, union cmd cmd)
 	gpu_process_fifo(gpu);
 }
 
-void gpu_gp1_cmd(struct gpu *UNUSED(gpu), union cmd cmd)
+void gpu_gp1_cmd(struct gpu *gpu, union cmd cmd)
 {
 	/* Execute command */
 	switch (cmd.opcode) {
+	case 0x00:
+		cmd_reset_gpu(gpu);
+		break;
+	case 0x04:
+		cmd_dma_dir(gpu, cmd);
+		break;
+	case 0x05:
+		cmd_start_of_display_area(gpu, cmd);
+		break;
+	case 0x06:
+		cmd_horizontal_display_range(gpu, cmd);
+		break;
+	case 0x07:
+		cmd_vertical_display_range(gpu, cmd);
+		break;
+	case 0x08:
+		cmd_display_mode(gpu, cmd);
+		break;
 	default:
 		LOG_W("Unhandled GP1 opcode (%02x)!\n", cmd.opcode);
 		break;
