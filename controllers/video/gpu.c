@@ -77,12 +77,168 @@ struct triangle {
 	struct render_data *render_data;
 };
 
+struct vertex {
+	uint32_t x_coord:11;
+	uint32_t unused1:5;
+	uint32_t y_coord:11;
+	uint32_t unused2:5;
+};
+
+struct color_attr {
+	uint32_t red:8;
+	uint32_t green:8;
+	uint32_t blue:8;
+	uint32_t unused:8;
+};
+
+struct tex_page_attr {
+	uint16_t x_base:4;
+	uint16_t y_base:1;
+	uint16_t semi_transparency:2;
+	uint16_t colors:2;
+	uint16_t unused1:2;
+	uint16_t tex_disable:1;
+	uint16_t unused2:2;
+	uint16_t unused3:2;
+};
+
+struct clut_attr {
+	uint16_t x_coord:6;
+	uint16_t y_coord:9;
+	uint16_t unused:1;
+};
+
+struct tex_coords {
+	uint8_t u;
+	uint8_t v;
+};
+
+struct coords {
+	uint32_t x_pos:16;
+	uint32_t y_pos:16;
+};
+
+struct dimensions {
+	uint32_t width:16;
+	uint32_t height:16;
+};
+
+union cmd_monochrome_poly {
+	uint32_t raw[5];
+	struct {
+		struct color_attr color;
+		struct vertex v1;
+		struct vertex v2;
+		struct vertex v3;
+		struct vertex v4;
+	};
+};
+
+union cmd_textured_poly {
+	uint32_t raw[9];
+	struct {
+		struct color_attr color;
+		struct vertex v1;
+		struct {
+			struct tex_coords tex_coords1;
+			struct clut_attr palette;
+		};
+		struct vertex v2;
+		struct {
+			struct tex_coords tex_coords2;
+			struct tex_page_attr tex_page;
+		};
+		struct vertex v3;
+		struct {
+			struct tex_coords tex_coords3;
+			uint16_t unused1;
+		};
+		struct vertex v4;
+		struct {
+			struct tex_coords tex_coords4;
+			uint16_t unused2;
+		};
+	};
+};
+
+union cmd_shaded_poly {
+	uint32_t raw[8];
+	struct {
+		struct color_attr color1;
+		struct vertex v1;
+		struct color_attr color2;
+		struct vertex v2;
+		struct color_attr color3;
+		struct vertex v3;
+		struct color_attr color4;
+		struct vertex v4;
+	};
+};
+
+union cmd_copy_rect {
+	uint32_t raw[3];
+	struct {
+		uint32_t command;
+		struct coords dest;
+		struct dimensions dimensions;
+	};
+};
+
+struct cmd_draw_mode_setting {
+	uint32_t x_base:4;
+	uint32_t y_base:1;
+	uint32_t semi_transparency:2;
+	uint32_t colors:2;
+	uint32_t dither:1;
+	uint32_t drawing_allowed:1;
+	uint32_t disable:1;
+	uint32_t rect_x_flip:1;
+	uint32_t rect_y_flip:1;
+	uint32_t unused:10;
+	uint32_t opcode:8;
+};
+
+struct cmd_tex_window_setting {
+	uint32_t mask_x:5;
+	uint32_t mask_y:5;
+	uint32_t offset_x:5;
+	uint32_t offset_y:5;
+	uint32_t unused:4;
+	uint32_t opcode:8;
+};
+
+struct cmd_set_drawing_area {
+	uint32_t x_coord:10;
+	uint32_t y_coord:10;
+	uint32_t unused:4;
+	uint32_t opcode:8;
+};
+
+struct cmd_set_drawing_offset {
+	uint32_t x_offset:11;
+	uint32_t y_offset:11;
+	uint32_t unused:2;
+	uint32_t opcode:8;
+};
+
+struct cmd_mask_bit_setting {
+	uint32_t set_while_drawing:1;
+	uint32_t check_before_draw:1;
+	uint32_t unused:22;
+	uint32_t opcode:8;
+};
+
 union cmd {
 	uint32_t raw;
 	struct {
 		uint32_t data:24;
 		uint32_t opcode:8;
 	};
+	struct cmd_draw_mode_setting draw_mode_setting;
+	struct cmd_tex_window_setting tex_window_setting;
+	struct cmd_set_drawing_area set_drawing_area;
+	struct cmd_set_drawing_offset set_drawing_offset;
+	struct cmd_mask_bit_setting mask_bit_setting;
 };
 
 struct copy_data {
@@ -183,6 +339,22 @@ static inline bool fifo_full(struct fifo *fifo);
 static inline uint8_t fifo_cmd(struct fifo *fifo);
 static inline bool fifo_enqueue(struct fifo *fifo, uint32_t data);
 static inline bool fifo_dequeue(struct fifo *fifo, uint32_t *data, int size);
+
+static inline void cmd_clear_cache(struct gpu *gpu);
+static inline void cmd_monochrome_3p_poly(struct gpu *gpu, bool opaque);
+static inline void cmd_monochrome_4p_poly(struct gpu *gpu, bool opaque);
+static inline void cmd_textured_3p_poly(struct gpu *gpu, bool opaque, bool raw);
+static inline void cmd_textured_4p_poly(struct gpu *gpu, bool opaque, bool raw);
+static inline void cmd_shaded_3p_poly(struct gpu *gpu, bool opaque);
+static inline void cmd_shaded_4p_poly(struct gpu *gpu, bool opaque);
+static inline void cmd_copy_rect_cpu_to_vram(struct gpu *gpu);
+static inline void cmd_copy_rect_vram_to_cpu(struct gpu *gpu);
+static inline void cmd_draw_mode_setting(struct gpu *gpu, union cmd cmd);
+static inline void cmd_tex_window_setting(struct gpu *gpu);
+static inline void cmd_set_drawing_area_tl(struct gpu *gpu, union cmd cmd);
+static inline void cmd_set_drawing_area_br(struct gpu *gpu, union cmd cmd);
+static inline void cmd_set_drawing_offset(struct gpu *gpu, union cmd cmd);
+static inline void cmd_mask_bit_setting(struct gpu *gpu);
 
 static struct mops gpu_mops = {
 	.readl = (readl_t)gpu_readl,
@@ -694,6 +866,505 @@ void draw_triangle(struct gpu *gpu, struct triangle *triangle)
 	draw_triangle_flat_top(gpu, &flat);
 }
 
+/* GP0(00h) - NOP
+   GP0(04h..1Eh,E0h,E7h..EFh) - Mirrors of GP0(00h) - NOP */
+void cmd_nop()
+{
+}
+
+/* GP0(01h) - Clear Cache */
+void cmd_clear_cache(struct gpu *gpu)
+{
+	/* Reset command buffer */
+	memset(&gpu->fifo, 0, sizeof(struct fifo));
+
+	/* Flag command as complete */
+	gpu->fifo.cmd_in_progress = false;
+}
+
+/* GP0(20h) - Monochrome three-point polygon, opaque
+   GP0(22h) - Monochrome three-point polygon, semi-transparent */
+void cmd_monochrome_3p_poly(struct gpu *gpu, bool opaque)
+{
+	union cmd_monochrome_poly cmd;
+	struct render_data render_data;
+	struct triangle triangle;
+	struct color c;
+
+	/* Dequeue FIFO (monochrome 3-point polygon needs 4 arguments) */
+	if (!fifo_dequeue(&gpu->fifo, cmd.raw, 4))
+		return;
+
+	/* Extract color from command */
+	c.r = cmd.color.red;
+	c.g = cmd.color.green;
+	c.b = cmd.color.blue;
+
+	/* Set render data */
+	render_data.opaque = opaque;
+	render_data.textured = false;
+	triangle.render_data = &render_data;
+
+	/* Set semi-transparency mode from status register if needed */
+	if (!opaque)
+		render_data.semi_transparency = gpu->stat.semi_transparency;
+
+	/* Build and draw triangle */
+	triangle.x1 = cmd.v1.x_coord;
+	triangle.y1 = cmd.v1.y_coord;
+	triangle.c1 = c;
+	triangle.x2 = cmd.v2.x_coord;
+	triangle.y2 = cmd.v2.y_coord;
+	triangle.c2 = c;
+	triangle.x3 = cmd.v3.x_coord;
+	triangle.y3 = cmd.v3.y_coord;
+	triangle.c3 = c;
+	draw_triangle(gpu, &triangle);
+
+	/* Flag command as complete */
+	gpu->fifo.cmd_in_progress = false;
+}
+
+/* GP0(28h) - Monochrome four-point polygon, opaque
+   GP0(2Ah) - Monochrome four-point polygon, semi-transparent */
+void cmd_monochrome_4p_poly(struct gpu *gpu, bool opaque)
+{
+	union cmd_monochrome_poly cmd;
+	struct render_data render_data;
+	struct triangle triangle;
+	struct color c;
+
+	/* Dequeue FIFO (monochrome 4-point polygon needs 5 arguments) */
+	if (!fifo_dequeue(&gpu->fifo, cmd.raw, 5))
+		return;
+
+	/* Extract color from command */
+	c.r = cmd.color.red;
+	c.g = cmd.color.green;
+	c.b = cmd.color.blue;
+
+	/* Set render data */
+	render_data.opaque = opaque;
+	render_data.textured = false;
+	triangle.render_data = &render_data;
+
+	/* Set semi-transparency mode from status register if needed */
+	if (!opaque)
+		render_data.semi_transparency = gpu->stat.semi_transparency;
+
+	/* Build and draw first triangle */
+	triangle.x1 = cmd.v1.x_coord;
+	triangle.y1 = cmd.v1.y_coord;
+	triangle.c1 = c;
+	triangle.x2 = cmd.v2.x_coord;
+	triangle.y2 = cmd.v2.y_coord;
+	triangle.c2 = c;
+	triangle.x3 = cmd.v3.x_coord;
+	triangle.y3 = cmd.v3.y_coord;
+	triangle.c3 = c;
+	draw_triangle(gpu, &triangle);
+
+	/* Build and draw second triangle */
+	triangle.x1 = cmd.v2.x_coord;
+	triangle.y1 = cmd.v2.y_coord;
+	triangle.c1 = c;
+	triangle.x2 = cmd.v3.x_coord;
+	triangle.y2 = cmd.v3.y_coord;
+	triangle.c2 = c;
+	triangle.x3 = cmd.v4.x_coord;
+	triangle.y3 = cmd.v4.y_coord;
+	triangle.c3 = c;
+	draw_triangle(gpu, &triangle);
+
+	/* Flag command as complete */
+	gpu->fifo.cmd_in_progress = false;
+}
+
+/* GP0(24h) - Textured three-point polygon, opaque, texture-blending
+   GP0(25h) - Textured three-point polygon, opaque, raw-texture
+   GP0(26h) - Textured three-point polygon, semi-transparent, texture-blending
+   GP0(27h) - Textured three-point polygon, semi-transparent, raw-texture */
+void cmd_textured_3p_poly(struct gpu *gpu, bool opaque, bool raw)
+{
+	union cmd_textured_poly cmd;
+	struct render_data render_data;
+	struct triangle triangle;
+	struct color c;
+
+	/* Dequeue FIFO (textured 3-point polygon needs 7 arguments) */
+	if (!fifo_dequeue(&gpu->fifo, cmd.raw, 7))
+		return;
+
+	/* Extract color from command */
+	c.r = cmd.color.red;
+	c.g = cmd.color.green;
+	c.b = cmd.color.blue;
+
+	/* Set render data */
+	render_data.opaque = opaque;
+	render_data.textured = true;
+	render_data.raw = raw;
+	render_data.tex_page_x = cmd.tex_page.x_base;
+	render_data.tex_page_y = cmd.tex_page.y_base;
+	render_data.clut_x = cmd.palette.x_coord;
+	render_data.clut_y = cmd.palette.y_coord;
+	triangle.render_data = &render_data;
+
+	/* Set semi-transparency mode from texture page if needed */
+	if (!opaque)
+		render_data.semi_transparency = cmd.tex_page.semi_transparency;
+
+	/* Build and draw triangle */
+	triangle.x1 = cmd.v1.x_coord;
+	triangle.y1 = cmd.v1.y_coord;
+	triangle.c1 = c;
+	triangle.u1 = cmd.tex_coords1.u;
+	triangle.v1 = cmd.tex_coords1.v;
+	triangle.x2 = cmd.v2.x_coord;
+	triangle.y2 = cmd.v2.y_coord;
+	triangle.c2 = c;
+	triangle.u2 = cmd.tex_coords2.u;
+	triangle.v2 = cmd.tex_coords2.v;
+	triangle.x3 = cmd.v3.x_coord;
+	triangle.y3 = cmd.v3.y_coord;
+	triangle.c3 = c;
+	triangle.u3 = cmd.tex_coords3.u;
+	triangle.v3 = cmd.tex_coords3.v;
+	draw_triangle(gpu, &triangle);
+
+	/* Flag command as complete */
+	gpu->fifo.cmd_in_progress = false;
+}
+
+/* GP0(2Ch) - Textured four-point polygon, opaque, texture-blending
+   GP0(2Dh) - Textured four-point polygon, opaque, raw-texture
+   GP0(2Eh) - Textured four-point polygon, semi-transparent, texture-blending
+   GP0(2Fh) - Textured four-point polygon, semi-transparent, raw-texture */
+void cmd_textured_4p_poly(struct gpu *gpu, bool opaque, bool raw)
+{
+	union cmd_textured_poly cmd;
+	struct render_data render_data;
+	struct triangle triangle;
+	struct color c;
+
+	/* Dequeue FIFO (textured 4-point polygon needs 9 arguments) */
+	if (!fifo_dequeue(&gpu->fifo, cmd.raw, 9))
+		return;
+
+	/* Extract color from command */
+	c.r = cmd.color.red;
+	c.g = cmd.color.green;
+	c.b = cmd.color.blue;
+
+	/* Set render data */
+	render_data.opaque = opaque;
+	render_data.textured = true;
+	render_data.raw = raw;
+	render_data.tex_page_x = cmd.tex_page.x_base;
+	render_data.tex_page_y = cmd.tex_page.y_base;
+	render_data.clut_x = cmd.palette.x_coord;
+	render_data.clut_y = cmd.palette.y_coord;
+	triangle.render_data = &render_data;
+
+	/* Set semi-transparency mode from texture page if needed */
+	if (!opaque)
+		render_data.semi_transparency = cmd.tex_page.semi_transparency;
+
+	/* Build and draw first triangle */
+	triangle.x1 = cmd.v1.x_coord;
+	triangle.y1 = cmd.v1.y_coord;
+	triangle.c1 = c;
+	triangle.u1 = cmd.tex_coords1.u;
+	triangle.v1 = cmd.tex_coords1.v;
+	triangle.x2 = cmd.v2.x_coord;
+	triangle.y2 = cmd.v2.y_coord;
+	triangle.c2 = c;
+	triangle.u2 = cmd.tex_coords2.u;
+	triangle.v2 = cmd.tex_coords2.v;
+	triangle.x3 = cmd.v3.x_coord;
+	triangle.y3 = cmd.v3.y_coord;
+	triangle.c3 = c;
+	triangle.u3 = cmd.tex_coords3.u;
+	triangle.v3 = cmd.tex_coords3.v;
+	draw_triangle(gpu, &triangle);
+
+	/* Build and draw second triangle */
+	triangle.x1 = cmd.v2.x_coord;
+	triangle.y1 = cmd.v2.y_coord;
+	triangle.c1 = c;
+	triangle.u1 = cmd.tex_coords2.u;
+	triangle.v1 = cmd.tex_coords2.v;
+	triangle.x2 = cmd.v3.x_coord;
+	triangle.y2 = cmd.v3.y_coord;
+	triangle.c2 = c;
+	triangle.u2 = cmd.tex_coords3.u;
+	triangle.v2 = cmd.tex_coords3.v;
+	triangle.x3 = cmd.v4.x_coord;
+	triangle.y3 = cmd.v4.y_coord;
+	triangle.c3 = c;
+	triangle.u3 = cmd.tex_coords4.u;
+	triangle.v3 = cmd.tex_coords4.v;
+	draw_triangle(gpu, &triangle);
+
+	/* Flag command as complete */
+	gpu->fifo.cmd_in_progress = false;
+}
+
+/* GP0(30h) - Shaded three-point polygon, opaque
+   GP0(32h) - Shaded three-point polygon, semi-transparent */
+void cmd_shaded_3p_poly(struct gpu *gpu, bool opaque)
+{
+	union cmd_shaded_poly cmd;
+	struct render_data render_data;
+	struct triangle triangle;
+
+	/* Dequeue FIFO (shaded 3-point polygon needs 6 arguments) */
+	if (!fifo_dequeue(&gpu->fifo, cmd.raw, 6))
+		return;
+
+	/* Set render data */
+	render_data.opaque = opaque;
+	render_data.textured = false;
+	triangle.render_data = &render_data;
+
+	/* Set semi-transparency mode from status register if needed */
+	if (!opaque)
+		render_data.semi_transparency = gpu->stat.semi_transparency;
+
+	/* Build and draw triangle */
+	triangle.x1 = cmd.v1.x_coord;
+	triangle.y1 = cmd.v1.y_coord;
+	triangle.c1.r = cmd.color1.red;
+	triangle.c1.g = cmd.color1.green;
+	triangle.c1.b = cmd.color1.blue;
+	triangle.x2 = cmd.v2.x_coord;
+	triangle.y2 = cmd.v2.y_coord;
+	triangle.c2.r = cmd.color2.red;
+	triangle.c2.g = cmd.color2.green;
+	triangle.c2.b = cmd.color2.blue;
+	triangle.x3 = cmd.v3.x_coord;
+	triangle.y3 = cmd.v3.y_coord;
+	triangle.c3.r = cmd.color3.red;
+	triangle.c3.g = cmd.color3.green;
+	triangle.c3.b = cmd.color3.blue;
+	draw_triangle(gpu, &triangle);
+
+	/* Flag command as complete */
+	gpu->fifo.cmd_in_progress = false;
+}
+
+/* GP0(38h) - Shaded four-point polygon, opaque
+   GP0(3Ah) - Shaded four-point polygon, semi-transparent */
+void cmd_shaded_4p_poly(struct gpu *gpu, bool opaque)
+{
+	union cmd_shaded_poly cmd;
+	struct render_data render_data;
+	struct triangle triangle;
+
+	/* Dequeue FIFO (shaded 4-point polygon needs 8 arguments) */
+	if (!fifo_dequeue(&gpu->fifo, cmd.raw, 8))
+		return;
+
+	/* Set render data */
+	render_data.opaque = opaque;
+	render_data.textured = false;
+	triangle.render_data = &render_data;
+
+	/* Set semi-transparency mode from status register if needed */
+	if (!opaque)
+		render_data.semi_transparency = gpu->stat.semi_transparency;
+
+	/* Build and draw first triangle */
+	triangle.x1 = cmd.v1.x_coord;
+	triangle.y1 = cmd.v1.y_coord;
+	triangle.c1.r = cmd.color1.red;
+	triangle.c1.g = cmd.color1.green;
+	triangle.c1.b = cmd.color1.blue;
+	triangle.x2 = cmd.v2.x_coord;
+	triangle.y2 = cmd.v2.y_coord;
+	triangle.c2.r = cmd.color2.red;
+	triangle.c2.g = cmd.color2.green;
+	triangle.c2.b = cmd.color2.blue;
+	triangle.x3 = cmd.v3.x_coord;
+	triangle.y3 = cmd.v3.y_coord;
+	triangle.c3.r = cmd.color3.red;
+	triangle.c3.g = cmd.color3.green;
+	triangle.c3.b = cmd.color3.blue;
+	draw_triangle(gpu, &triangle);
+
+	/* Build and draw second triangle */
+	triangle.x1 = cmd.v2.x_coord;
+	triangle.y1 = cmd.v2.y_coord;
+	triangle.c1.r = cmd.color2.red;
+	triangle.c1.g = cmd.color2.green;
+	triangle.c1.b = cmd.color2.blue;
+	triangle.x2 = cmd.v3.x_coord;
+	triangle.y2 = cmd.v3.y_coord;
+	triangle.c2.r = cmd.color3.red;
+	triangle.c2.g = cmd.color3.green;
+	triangle.c2.b = cmd.color3.blue;
+	triangle.x3 = cmd.v4.x_coord;
+	triangle.y3 = cmd.v4.y_coord;
+	triangle.c3.r = cmd.color4.red;
+	triangle.c3.g = cmd.color4.green;
+	triangle.c3.b = cmd.color4.blue;
+	draw_triangle(gpu, &triangle);
+
+	/* Flag command as complete */
+	gpu->fifo.cmd_in_progress = false;
+}
+
+/* GP0(A0h) - Copy Rectangle (CPU to VRAM) */
+void cmd_copy_rect_cpu_to_vram(struct gpu *gpu)
+{
+	union cmd_copy_rect cmd;
+	bool decoded;
+	int count;
+	uint32_t data;
+	uint32_t offset;
+	uint16_t half_word;
+	int i;
+
+	/* Check if command is decoded (set once no words are left) */
+	decoded = (gpu->fifo.cmd_word_count > 0);
+
+	/* Retrieve command parameters if needed (3 arguments) */
+	if (!decoded && !fifo_dequeue(&gpu->fifo, cmd.raw, 3))
+		return;
+
+	/* Set word count based on dimensions (handling padding) if needed */
+	if (gpu->fifo.cmd_word_count == 0) {
+		/* Save copy data */
+		gpu->copy_data.x = cmd.dest.x_pos;
+		gpu->copy_data.y = cmd.dest.y_pos;
+		gpu->copy_data.min_x = cmd.dest.x_pos;
+		gpu->copy_data.min_y = cmd.dest.y_pos;
+		gpu->copy_data.max_x = cmd.dest.x_pos + cmd.dimensions.width;
+		gpu->copy_data.max_y = cmd.dest.y_pos + cmd.dimensions.height;
+
+		/* Get command word count based on pixel count */
+		count = cmd.dimensions.width * cmd.dimensions.height;
+		gpu->fifo.cmd_word_count = (count + 1) / 2;
+	}
+
+	/* Dequeue data */
+	if (fifo_dequeue(&gpu->fifo, &data, 1)) {
+		/* Copy two half words (data contains two pixels) */
+		for (i = 0; i < 2; i++) {
+			/* Get appropriate half word */
+			half_word = ((i % 2) == 0) ? data & 0xFFFF : data >> 16;
+
+			/* Compute destination offset in frame buffer */
+			offset = gpu->copy_data.x;
+			offset += gpu->copy_data.y * FB_W;
+			offset *= sizeof(uint16_t);
+
+			/* Write bytes to frame buffer */
+			gpu->vram[offset] = half_word >> 8;
+			gpu->vram[offset + 1] = half_word;
+
+			/* Update destination coordinates (handling bounds) */
+			if (++gpu->copy_data.x == gpu->copy_data.max_x) {
+				gpu->copy_data.x = gpu->copy_data.min_x;
+				if (++gpu->copy_data.y == gpu->copy_data.max_y)
+					break;
+			}
+		}
+
+		/* Decrement word count and flag command as complete */
+		if (--gpu->fifo.cmd_word_count == 0)
+			gpu->fifo.cmd_in_progress = false;
+	}
+}
+
+/* GP0(C0h) - Copy Rectangle (VRAM to CPU) */
+void cmd_copy_rect_vram_to_cpu(struct gpu *gpu)
+{
+	union cmd_copy_rect cmd;
+	//int hw_count;
+
+	/* Retrieve command parameters (3 arguments) */
+	if (!fifo_dequeue(&gpu->fifo, cmd.raw, 3))
+		return;
+
+	/* Set half word count based on dimensions */
+	//hw_count = cmd.dimensions.width * cmd.dimensions.height;
+
+	/* Flag command as complete */
+	gpu->fifo.cmd_in_progress = false;
+}
+
+/* GP0(E1h) - Draw Mode setting (aka "Texpage") */
+void cmd_draw_mode_setting(struct gpu *gpu, union cmd cmd)
+{
+	/* Save drawing mode parameters */
+	gpu->stat.tex_page_x_base = cmd.draw_mode_setting.x_base;
+	gpu->stat.tex_page_y_base = cmd.draw_mode_setting.y_base;
+	gpu->stat.semi_transparency = cmd.draw_mode_setting.semi_transparency;
+	gpu->stat.tex_page_colors = cmd.draw_mode_setting.colors;
+	gpu->stat.dither = cmd.draw_mode_setting.dither;
+	gpu->stat.drawing_allowed = cmd.draw_mode_setting.drawing_allowed;
+	gpu->stat.tex_disable = cmd.draw_mode_setting.disable;
+}
+
+/* GP0(E2h) - Texture Window setting */
+void cmd_tex_window_setting(struct gpu *gpu)
+{
+	union cmd cmd;
+
+	/* Dequeue command */
+	fifo_dequeue(&gpu->fifo, &cmd.raw, 1);
+
+	/* Save texture window parameters */
+	gpu->tex_window_mask_x = cmd.tex_window_setting.mask_x;
+	gpu->tex_window_mask_y = cmd.tex_window_setting.mask_y;
+	gpu->tex_window_offset_x = cmd.tex_window_setting.offset_x;
+	gpu->tex_window_offset_y = cmd.tex_window_setting.offset_y;
+
+	/* Flag command as complete */
+	gpu->fifo.cmd_in_progress = false;
+}
+
+/* GP0(E3h) - Set Drawing Area top left (X1,Y1) */
+void cmd_set_drawing_area_tl(struct gpu *gpu, union cmd cmd)
+{
+	/* Update top-left X/Y drawing area coordinates */
+	gpu->drawing_area_x1 = cmd.set_drawing_area.x_coord;
+	gpu->drawing_area_y1 = cmd.set_drawing_area.y_coord;
+}
+
+/* GP0(E4h) - Set Drawing Area bottom right (X2,Y2) */
+void cmd_set_drawing_area_br(struct gpu *gpu, union cmd cmd)
+{
+	/* Update bottom-right X/Y drawing area coordinates */
+	gpu->drawing_area_x2 = cmd.set_drawing_area.x_coord;
+	gpu->drawing_area_y2 = cmd.set_drawing_area.y_coord;
+}
+
+/* GP0(E5h) - Set Drawing Offset (X,Y) */
+void cmd_set_drawing_offset(struct gpu *gpu, union cmd cmd)
+{
+	/* Update X/Y drawing offset */
+	gpu->drawing_offset_x = (int16_t)cmd.set_drawing_offset.x_offset;
+	gpu->drawing_offset_y = (int16_t)cmd.set_drawing_offset.y_offset;
+}
+
+/* GP0(E6h) - Mask Bit Setting */
+void cmd_mask_bit_setting(struct gpu *gpu)
+{
+	union cmd cmd;
+
+	/* Dequeue command */
+	fifo_dequeue(&gpu->fifo, &cmd.raw, 1);
+
+	/* Save mask bit parameters */
+	gpu->set_mask_while_drawing = cmd.mask_bit_setting.set_while_drawing;
+	gpu->check_mask_before_draw = cmd.mask_bit_setting.check_before_draw;
+
+	/* Flag command as complete */
+	gpu->fifo.cmd_in_progress = false;
+}
+
 bool fifo_empty(struct fifo *fifo)
 {
 	/* Return whether if FIFO is empty or not */
@@ -826,6 +1497,70 @@ void gpu_process_fifo(struct gpu *gpu)
 
 	/* Handle GP0 command */
 	switch (fifo->cmd_opcode) {
+	case 0x01:
+		cmd_clear_cache(gpu);
+		break;
+	case 0x20:
+		cmd_monochrome_3p_poly(gpu, true);
+		break;
+	case 0x22:
+		cmd_monochrome_3p_poly(gpu, false);
+		break;
+	case 0x24:
+		cmd_textured_3p_poly(gpu, true, false);
+		break;
+	case 0x25:
+		cmd_textured_3p_poly(gpu, true, true);
+		break;
+	case 0x26:
+		cmd_textured_3p_poly(gpu, false, false);
+		break;
+	case 0x27:
+		cmd_textured_3p_poly(gpu, false, true);
+		break;
+	case 0x28:
+		cmd_monochrome_4p_poly(gpu, true);
+		break;
+	case 0x2A:
+		cmd_monochrome_4p_poly(gpu, false);
+		break;
+	case 0x2C:
+		cmd_textured_4p_poly(gpu, true, false);
+		break;
+	case 0x2D:
+		cmd_textured_4p_poly(gpu, true, true);
+		break;
+	case 0x2E:
+		cmd_textured_4p_poly(gpu, false, false);
+		break;
+	case 0x2F:
+		cmd_textured_4p_poly(gpu, false, true);
+		break;
+	case 0x30:
+		cmd_shaded_3p_poly(gpu, true);
+		break;
+	case 0x32:
+		cmd_shaded_3p_poly(gpu, false);
+		break;
+	case 0x38:
+		cmd_shaded_4p_poly(gpu, true);
+		break;
+	case 0x3A:
+		cmd_shaded_4p_poly(gpu, false);
+		break;
+	case 0xA0:
+		cmd_copy_rect_cpu_to_vram(gpu);
+		break;
+	case 0xC0:
+		cmd_copy_rect_vram_to_cpu(gpu);
+		break;
+	case 0xE2:
+		cmd_tex_window_setting(gpu);
+		break;
+	case 0xE6:
+		cmd_mask_bit_setting(gpu);
+		break;
+	default:
 		LOG_W("Unhandled GP0 opcode (%02x)!\n", fifo->cmd_opcode);
 		break;
 	}
@@ -833,12 +1568,64 @@ void gpu_process_fifo(struct gpu *gpu)
 
 void gpu_gp0_cmd(struct gpu *gpu, union cmd cmd)
 {
-	/* Handle immediate commands */
-	switch (cmd.opcode) {
-	default:
-		LOG_W("Unhandled GP0 opcode (%02x)!\n", cmd.opcode);
-		break;
-	}
+	/* Handle immediate commands and leave if no command is in progress */
+	if (!gpu->fifo.cmd_in_progress)
+		switch (cmd.opcode) {
+		case 0x00:
+		case 0x04:
+		case 0x05:
+		case 0x06:
+		case 0x07:
+		case 0x08:
+		case 0x09:
+		case 0x0A:
+		case 0x0B:
+		case 0x0C:
+		case 0x0D:
+		case 0x0E:
+		case 0x0F:
+		case 0x10:
+		case 0x11:
+		case 0x12:
+		case 0x13:
+		case 0x14:
+		case 0x15:
+		case 0x16:
+		case 0x17:
+		case 0x18:
+		case 0x19:
+		case 0x1A:
+		case 0x1B:
+		case 0x1C:
+		case 0x1D:
+		case 0x1E:
+		case 0xE0:
+		case 0xE7:
+		case 0xE8:
+		case 0xE9:
+		case 0xEA:
+		case 0xEB:
+		case 0xEC:
+		case 0xED:
+		case 0xEE:
+		case 0xEF:
+			cmd_nop();
+			return;
+		case 0xE1:
+			cmd_draw_mode_setting(gpu, cmd);
+			return;
+		case 0xE3:
+			cmd_set_drawing_area_tl(gpu, cmd);
+			return;
+		case 0xE4:
+			cmd_set_drawing_area_br(gpu, cmd);
+			return;
+		case 0xE5:
+			cmd_set_drawing_offset(gpu, cmd);
+			return;
+		default:
+			break;
+		}
 
 	/* Add command/data to FIFO */
 	fifo_enqueue(&gpu->fifo, cmd.raw);
